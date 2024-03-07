@@ -28,7 +28,9 @@ import sys
 import threading
 from pathlib import Path
 from typing import Union
+from io import BytesIO
 
+import json
 import geojson
 import mercantile
 from cpuinfo import get_cpu_info
@@ -54,10 +56,10 @@ log = logging.getLogger(__name__)
 
 
 def dlthread(
-    dest: str,
-    mirrors: list,
-    tiles: list,
-    xy: bool,
+        dest: str,
+        mirrors: list,
+        tiles: list,
+        xy: bool,
 ):
     """Thread to handle downloads for Queue.
 
@@ -124,11 +126,12 @@ class BaseMapper(object):
     """Basemapper parent class."""
 
     def __init__(
-        self,
-        boundary: str,
-        base: str,
-        source: str,
-        xy: bool,
+            self,
+            boundary: str,
+            base: str,
+            source: str,
+            xy: bool,
+            is_byte_string: bool = True
     ):
         """Create an tile basemap for ODK Collect.
 
@@ -142,7 +145,7 @@ class BaseMapper(object):
         Returns:
             (BaseMapper): An instance of this class
         """
-        self.bbox = self.makeBbox(boundary)
+        self.bbox = self.makeBbox(boundary, is_byte_string)
         self.tiles = list()
         self.base = base
         # sources for imagery
@@ -209,8 +212,8 @@ class BaseMapper(object):
         return self.sources[self.source]["suffix"]
 
     def getTiles(
-        self,
-        zoom: int = None,
+            self,
+            zoom: int = None,
     ):
         """Get a list of tiles for the specifed zoom level.
 
@@ -239,7 +242,7 @@ class BaseMapper(object):
                 # results = []
                 block = 0
                 while block <= len(self.tiles):
-                    executor.submit(dlthread, self.base, mirrors, self.tiles[block : block + chunk], self.xy)
+                    executor.submit(dlthread, self.base, mirrors, self.tiles[block: block + chunk], self.xy)
                     # result = executor.submit(dlthread, self.base, mirrors, self.tiles[block : block + chunk], self.xy)
                     # results.append(result)
                     log.debug("Dispatching Block %d:%d" % (block, block + chunk))
@@ -251,8 +254,8 @@ class BaseMapper(object):
         return len(self.tiles)
 
     def tileExists(
-        self,
-        tile: MapTile,
+            self,
+            tile: MapTile,
     ):
         """See if a map tile already exists.
 
@@ -271,8 +274,9 @@ class BaseMapper(object):
             return False
 
     def makeBbox(
-        self,
-        boundary: str,
+            self,
+            boundary: str,
+            is_byte_string: bool = True
     ) -> tuple[float, float, float, float]:
         """Make a bounding box from a shapely geometry.
 
@@ -283,7 +287,8 @@ class BaseMapper(object):
         Returns:
             (list): The bounding box coordinates
         """
-        if not boundary.lower().endswith((".json", ".geojson")):
+
+        if not boundary.lower().endswith((".json", ".geojson")) and not is_byte_string:
             # Is BBOX string
             try:
                 if "," in boundary:
@@ -303,28 +308,13 @@ class BaseMapper(object):
                 msg = f"Failed to parse BBOX string: {boundary}"
                 log.error(msg)
                 raise ValueError(msg) from None
-
-        log.debug(f"Reading geojson file: {boundary}")
-        with open(boundary, "r") as f:
-            poly = geojson.load(f)
-        if "features" in poly:
-            geometry = shape(poly["features"][0]["geometry"])
-        elif "geometry" in poly:
-            geometry = shape(poly["geometry"])
+        if is_byte_string:
+            poly = json.loads(boundary)
         else:
-            geometry = shape(poly)
-
-        if isinstance(geometry, list):
-            # Multiple geometries
-            log.debug("Creating union of multiple bbox geoms")
-            geometry = unary_union(geometry)
-
-        if geometry.is_empty:
-            msg = f"No bbox extracted from {geometry}"
-            log.error(msg)
-            raise ValueError(msg) from None
-
-        bbox = geometry.bounds
+            log.debug(f"Reading geojson file: {boundary}")
+            with open(boundary, "r") as f:
+                poly = geojson.load(f)
+        bbox = make_bbox_helper(poly)
         # left, bottom, right, top
         # minX, minY, maxX, maxY
         return bbox
@@ -407,14 +397,14 @@ def tile_dir_to_pmtiles(outfile: str, tile_dir: str, bbox: tuple, attribution: s
 
 
 def create_basemap_file(
-    verbose=False,
-    boundary=None,
-    tms=None,
-    xy=False,
-    outfile=None,
-    zooms="12-17",
-    outdir=None,
-    source="esri",
+        verbose=False,
+        boundary=None,
+        tms=None,
+        xy=False,
+        outfile=None,
+        zooms="12-17",
+        outdir=None,
+        source="esri",
 ):
     """Create a basemap with given parameters.
 
@@ -493,7 +483,12 @@ def create_basemap_file(
         log.error(err)
         raise ValueError(err)
 
-    basemap = BaseMapper(boundary, tiledir, source, xy)
+    is_byte_string = False
+
+    if isinstance(boundary, BytesIO):
+        is_byte_string = True
+        boundary = boundary.getvalue().decode("utf-8")
+    basemap = BaseMapper(boundary, tiledir, source, xy, is_byte_string)
 
     if tms:
         # Add TMS URL to sources for download
@@ -529,6 +524,27 @@ def create_basemap_file(
         raise ValueError(msg) from None
     log.info(f"Wrote {outfile}")
 
+
+def make_bbox_helper(poly):
+    if "features" in poly:
+        geometry = shape(poly["features"][0]["geometry"])
+    elif "geometry" in poly:
+        geometry = shape(poly["geometry"])
+    else:
+        geometry = shape(poly)
+
+    if isinstance(geometry, list):
+        # Multiple geometries
+        log.debug("Creating union of multiple bbox geoms")
+        geometry = unary_union(geometry)
+
+    if geometry.is_empty:
+        msg = f"No bbox extracted from {geometry}"
+        log.error(msg)
+        raise ValueError(msg) from None
+
+    bbox = geometry.bounds
+    return bbox
 
 def main():
     """This main function lets this class be run standalone by a bash script."""
