@@ -17,5 +17,4 @@ def main():
 
 
 if __name__ == "__main__":
-    """This is just a hook so this file can be run standlone during development."""
     main()
