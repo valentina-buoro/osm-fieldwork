@@ -93,7 +93,6 @@ def test_create_basemapper_from_byte_stream():
     assert hits == 2
 
 
-
 if __name__ == "__main__":
     test_create()
     test_create_basemapper_from_byte_stream()
