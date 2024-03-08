@@ -10,7 +10,7 @@ def main():
     create_basemap_file(
         verbose=True,
         boundary=boundary_bytesio,
-        outfile=None,
+        outfile="outreachy.mbtiles",
         zooms="12-15",
         source="esri",
     )
