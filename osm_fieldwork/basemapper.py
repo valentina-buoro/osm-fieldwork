@@ -26,6 +26,7 @@ import queue
 import re
 import sys
 import threading
+from io import BytesIO
 from pathlib import Path
 from typing import Union
 
@@ -123,14 +124,8 @@ def dlthread(
 class BaseMapper(object):
     """Basemapper parent class."""
 
-    def __init__(
-        self,
-        boundary: str,
-        base: str,
-        source: str,
-        xy: bool,
-    ):
-        """Create an tile basemap for ODK Collect.
+    def __init__(self, boundary: str, base: str, source: str, xy: bool, is_boundary_byte_string: bool = True):
+        """Create a tile basemap for ODK Collect.
 
         Args:
             boundary (str): A BBOX string or GeoJSON file of the AOI.
@@ -138,11 +133,12 @@ class BaseMapper(object):
             base (str): The base directory to cache map tile in
             source (str): The upstream data source for map tiles
             xy (bool): Whether to swap the X & Y fields in the TMS URL
+            is_boundary_byte_string (bool) :  A boolean to indicate whether the boundary is a byte string
 
         Returns:
             (BaseMapper): An instance of this class
         """
-        self.bbox = self.makeBbox(boundary)
+        self.bbox = self.makeBbox(boundary, is_boundary_byte_string)
         self.tiles = list()
         self.base = base
         # sources for imagery
@@ -270,20 +266,18 @@ class BaseMapper(object):
             log.debug("%s doesn't exists" % filespec)
             return False
 
-    def makeBbox(
-        self,
-        boundary: str,
-    ) -> tuple[float, float, float, float]:
+    def makeBbox(self, boundary: str, is_boundary_byte_string: bool = True) -> tuple[float, float, float, float]:
         """Make a bounding box from a shapely geometry.
 
         Args:
             boundary (str): A BBOX string or GeoJSON file of the AOI.
                 The GeoJSON can contain multiple geometries.
+            is_boundary_byte_string (bool): A boolean to indicate whether the boundary is a byte string
 
         Returns:
             (list): The bounding box coordinates
         """
-        if not boundary.lower().endswith((".json", ".geojson")):
+        if not is_boundary_byte_string:
             # Is BBOX string
             try:
                 if "," in boundary:
@@ -303,16 +297,26 @@ class BaseMapper(object):
                 msg = f"Failed to parse BBOX string: {boundary}"
                 log.error(msg)
                 raise ValueError(msg) from None
-
-        log.debug(f"Reading geojson file: {boundary}")
-        with open(boundary, "r") as f:
-            poly = geojson.load(f)
-        if "features" in poly:
-            geometry = shape(poly["features"][0]["geometry"])
-        elif "geometry" in poly:
-            geometry = shape(poly["geometry"])
         else:
-            geometry = shape(poly)
+            geojson_dictionary = geojson.loads(boundary)
+
+        return self.construct_bbox_from_geojson_dictionary(geojson_dictionary)
+
+    def construct_bbox_from_geojson_dictionary(self, geojson_dictionary: dict) -> tuple[float, float, float, float]:
+        """Make a bounding box from a geojson dictionary.
+
+        Args:
+            geojson_dictionary (str): A dictionary representing the boundary as geojson.
+
+        Returns:
+            (list): The bounding box coordinates
+        """
+        if "features" in geojson_dictionary:
+            geometry = shape(geojson_dictionary["features"][0]["geometry"])
+        elif "geometry" in geojson_dictionary:
+            geometry = shape(geojson_dictionary["geometry"])
+        else:
+            geometry = shape(geojson_dictionary)
 
         if isinstance(geometry, list):
             # Multiple geometries
@@ -325,8 +329,6 @@ class BaseMapper(object):
             raise ValueError(msg) from None
 
         bbox = geometry.bounds
-        # left, bottom, right, top
-        # minX, minY, maxX, maxY
         return bbox
 
 
@@ -493,7 +495,11 @@ def create_basemap_file(
         log.error(err)
         raise ValueError(err)
 
-    basemap = BaseMapper(boundary, tiledir, source, xy)
+    is_boundary_byte_string = False
+    if isinstance(boundary, BytesIO):
+        boundary = boundary.getvalue().decode("utf-8")
+        is_boundary_byte_string = True
+    basemap = BaseMapper(boundary, tiledir, source, xy, is_boundary_byte_string)
 
     if tms:
         # Add TMS URL to sources for download
@@ -570,13 +576,18 @@ def main():
         quit()
 
     if len(args.boundary) == 1:
-        if Path(args.boundary[0]).suffix not in [".json", ".geojson"]:
+        if not (isinstance(args.boundary, BytesIO)) and Path(args.boundary[0]).suffix in [".json", ".geojson"]:
+            with open(args.boundary[0], "rb") as geojson_file:
+                boundary = geojson_file.read()
+                boundary_parsed = BytesIO(boundary)
+        elif not (isinstance(args.boundary, BytesIO)) and Path(args.boundary[0]).suffix not in [".json", ".geojson"]:
             log.error("")
             log.error("*Error*: the boundary file must have .json or .geojson extension")
             log.error("")
             parser.print_help()
             quit()
-        boundary_parsed = args.boundary[0]
+        else:
+            boundary_parsed = args.boundary
     elif len(args.boundary) == 4:
         boundary_parsed = ",".join(args.boundary)
     else:
