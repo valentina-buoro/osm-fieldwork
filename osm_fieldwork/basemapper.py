@@ -125,7 +125,7 @@ class BaseMapper(object):
     """Basemapper parent class."""
 
     def __init__(self, boundary: str, base: str, source: str, xy: bool, is_boundary_byte_string: bool = True):
-        """Create an tile basemap for ODK Collect.
+        """Create a tile basemap for ODK Collect.
 
         Args:
             boundary (str): A BBOX string or GeoJSON file of the AOI.
@@ -133,11 +133,11 @@ class BaseMapper(object):
             base (str): The base directory to cache map tile in
             source (str): The upstream data source for map tiles
             xy (bool): Whether to swap the X & Y fields in the TMS URL
+            is_boundary_byte_string (bool) :  A boolean to indicate whether the boundary is a byte string
 
         Returns:
             (BaseMapper): An instance of this class
         """
-
         self.bbox = self.makeBbox(boundary, is_boundary_byte_string)
         self.tiles = list()
         self.base = base
@@ -577,7 +577,7 @@ def main():
 
     if len(args.boundary) == 1:
         if not (isinstance(args.boundary, BytesIO)) and Path(args.boundary[0]).suffix in [".json", ".geojson"]:
-            with open(args.boundary, "rb") as geojson_file:
+            with open(args.boundary[0], "rb") as geojson_file:
                 boundary = geojson_file.read()
                 boundary_parsed = BytesIO(boundary)
         elif not (isinstance(args.boundary, BytesIO)) and Path(args.boundary[0]).suffix not in [".json", ".geojson"]:
